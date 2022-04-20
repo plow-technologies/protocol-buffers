@@ -76,9 +76,9 @@ import Control.Monad.Error.Class(MonadError(throwError,catchError),Error(strMsg)
 --import qualified Data.ByteString.Lazy as L(pack) -- XXX testing
 import Control.Monad(ap)                             -- instead of Functor.fmap; ap for Applicative
 import qualified Control.Monad.Fail as Fail
-import Data.Bits(Bits((.|.),(.&.)),shiftL)
+import Data.Bits(Bits((.|.),(.&.)),shiftL,unsafeShiftL)
 import qualified Data.ByteString as S(concat,length,null,splitAt,findIndex)
-import qualified Data.ByteString.Internal as S(ByteString(..),toForeignPtr,inlinePerformIO)
+import qualified Data.ByteString.Internal as S(ByteString(..),toForeignPtr)
 import qualified Data.ByteString.Unsafe as S(unsafeIndex,unsafeDrop {-,unsafeTake-})
 import qualified Data.ByteString.Lazy as L(take,drop,length,span,toChunks,fromChunks,null,findIndex)
 import qualified Data.ByteString.Lazy.Internal as L(ByteString(..),chunk)
@@ -90,10 +90,6 @@ import Foreign.ForeignPtr(withForeignPtr)
 import Foreign.Ptr(Ptr,castPtr,plusPtr,minusPtr,nullPtr)
 import Foreign.Storable(Storable(peek,sizeOf))
 import System.IO.Unsafe(unsafePerformIO)
-#if defined(__GLASGOW_HASKELL__) && !defined(__HADDOCK__)
-import GHC.Base(Int(..),uncheckedShiftL#)
-import GHC.Word(Word16(..),Word32(..),Word64(..),uncheckedShiftL64#)
-#endif
 --import Debug.Trace(trace)
 
 trace :: a -> b -> b
@@ -781,8 +777,6 @@ instance Functor Get where
   {-# INLINE fmap #-}
 
 instance Monad Get where
-  return a = seq a $ Get (\sc -> sc a)
-  {-# INLINE return #-}
   m >>= k  = Get (\sc -> unGet m (\ a -> seq a $ unGet (k a) sc))
   {-# INLINE (>>=) #-}
 
@@ -807,8 +801,9 @@ instance MonadPlus Get where
   mplus m1 m2 = catchError m1 (const m2)
 
 instance Applicative Get where
-  pure = return
   (<*>) = ap
+  {-# INLINE pure #-}
+  pure a = seq a $ Get (\sc -> sc a)
 
 instance Alternative Get where
   empty = mzero
@@ -839,7 +834,7 @@ splitAtOrDie i (L.Chunk x xs) | i < len = let (pre,post) = S.splitAt (fromIntegr
 getPtr :: (Storable a) => Int -> Get a
 getPtr n = do
     (fp,o,_) <- fmap S.toForeignPtr (getByteString n)
-    return . S.inlinePerformIO $ withForeignPtr fp $ \p -> peek (castPtr $ p `plusPtr` o)
+    return . unsafePerformIO $ withForeignPtr fp $ \p -> peek (castPtr $ p `plusPtr` o)
 {-# INLINE getPtr #-}
 
 -- I pushed the sizeOf into here (uses ScopedTypeVariables)
@@ -847,7 +842,7 @@ getPtr n = do
 getStorable :: forall a. (Storable a) => Get a
 getStorable = do
     (fp,o,_) <- fmap S.toForeignPtr (getByteString (sizeOf (undefined :: a)))
-    return . S.inlinePerformIO $ withForeignPtr fp $ \p -> peek (castPtr $ p `plusPtr` o)
+    return . unsafePerformIO $ withForeignPtr fp $ \p -> peek (castPtr $ p `plusPtr` o)
 {-# INLINE getStorable #-}
 
 ------------------------------------------------------------------------
@@ -857,20 +852,6 @@ getStorable = do
 shiftl_w16 :: Word16 -> Int -> Word16
 shiftl_w32 :: Word32 -> Int -> Word32
 shiftl_w64 :: Word64 -> Int -> Word64
-
-#if defined(__GLASGOW_HASKELL__) && !defined(__HADDOCK__)
-shiftl_w16 (W16# w) (I# i) = W16# (w `uncheckedShiftL#`   i)
-shiftl_w32 (W32# w) (I# i) = W32# (w `uncheckedShiftL#`   i)
-
-#if WORD_SIZE_IN_BITS < 64
-shiftl_w64 (W64# w) (I# i) = W64# (w `uncheckedShiftL64#` i)
-
-#else
-shiftl_w64 (W64# w) (I# i) = W64# (w `uncheckedShiftL#` i)
-#endif
-
-#else
-shiftl_w16 = shiftL
-shiftl_w32 = shiftL
-shiftl_w64 = shiftL
-#endif
+shiftl_w16 = unsafeShiftL
+shiftl_w32 = unsafeShiftL
+shiftl_w64 = unsafeShiftL
